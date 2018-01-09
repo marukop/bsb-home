@@ -19,6 +19,25 @@ public class Product {
 
 	/**
 	 * <p>
+	 * The Manufacturer MFG_CODE (manufacturer name) length.
+	 * </p>
+	 */
+	public static final int MFG_CODE_LENGTH = 20;
+
+	/**
+	 * <p>
+	 * The Parts table's Description length.
+	 * </p>
+	 */
+	public static final int PARTS_DESCRITPION_LENGTH = 50;
+
+	/**
+	 * <p>The Parts table's PN length.</p>
+	 */
+	public static final int PARTS_PN_LENGTH = 40;
+
+	/**
+	 * <p>
 	 * The alternate part number (i.e. an alternative to the current product's part
 	 * number).
 	 * </p>

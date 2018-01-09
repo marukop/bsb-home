@@ -70,16 +70,16 @@ public class ProductDAO {
 	 * Query to use to insert a PRODUCT.
 	 * </p>
 	 */
-	private static final String PRODUCT_INSERT = "INSERT INTO PARTS_MASTER (PNM_AUTO_KEY, PN, PN_UPPER, DESCRIPTION, MFG_AUTO_KEY, UOM_AUTO_KEY, NOTES) "
-			+ "VALUES (G_PNM_AUTO_KEY.NEXTVAL, ?, ?, ?, ?, ?, ?) RETURNING PNM_AUTO_KEY INTO ?";
+	private static final String PRODUCT_INSERT = "INSERT INTO PARTS_MASTER (PNM_AUTO_KEY, PN, PN_UPPER, DESCRIPTION, DESCRIPTION_UPPER, MFG_AUTO_KEY, UOM_AUTO_KEY, NOTES) "
+			+ "VALUES (G_PNM_AUTO_KEY.NEXTVAL, ?, ?, ?, ?, ?, ?, ?) RETURNING PNM_AUTO_KEY INTO ?";
 
 	/**
 	 * <p>
 	 * Query to use to insert a PRODUCT for an alternate PRODUCT.
 	 * </p>
 	 */
-	private static final String PRODUCT_INSERT_FOR_ALT = "INSERT INTO PARTS_MASTER (PNM_AUTO_KEY, PN, PN_UPPER, DESCRIPTION, MFG_AUTO_KEY, UOM_AUTO_KEY, NOTES, REMARKS, SERIALIZED) "
-			+ "VALUES (G_PNM_AUTO_KEY.NEXTVAL, ?, ?, ?, ?, ?, ?, 'OCDIA', 'F') RETURNING PNM_AUTO_KEY INTO ?";
+	private static final String PRODUCT_INSERT_FOR_ALT = "INSERT INTO PARTS_MASTER (PNM_AUTO_KEY, PN, PN_UPPER, DESCRIPTION, DESCRIPTION_UPPER, MFG_AUTO_KEY, UOM_AUTO_KEY, NOTES, REMARKS, SERIALIZED) "
+			+ "VALUES (G_PNM_AUTO_KEY.NEXTVAL, ?, ?, ?, ?, ?, ?, ?, 'OCDIA', 'F') RETURNING PNM_AUTO_KEY INTO ?";
 
 	/**
 	 * <p>
@@ -134,6 +134,36 @@ public class ProductDAO {
 
 	/**
 	 * <p>
+	 * Check whether the PartNumber - Manufacturer combination exists in DB.
+	 * </p>
+	 * 
+	 * @param aPartNumber
+	 *            the part number (truncated) to check.
+	 * @param aManufacturerId
+	 *            the manufacturer identifier to use.
+	 * @return <code>true</code> if the combination exists, <code>false</code>
+	 *         otherwise.
+	 * @throws SQLException
+	 *             if an error occurs while querying the DB.
+	 */
+	private boolean existsProductAndManufacturer(String aPartNumber, NUMBER aManufacturerId) throws SQLException {
+		boolean exists = false;
+		try (OraclePreparedStatement productStatement = (OraclePreparedStatement) connection
+				.prepareStatement(PN_SEARCH);) {
+			productStatement.setString(1, getTruncatedOrValue(aPartNumber, Product.PARTS_PN_LENGTH));
+			OracleResultSet result = (OracleResultSet) productStatement.executeQuery();
+			if (result.next()) {
+				do {
+					NUMBER mfgId = result.getNUMBER(2);
+					exists = mfgId.longValue() == aManufacturerId.longValue();
+				} while (result.next() && !exists);
+			}
+		}
+		return exists;
+	}
+
+	/**
+	 * <p>
 	 * Retrieve the manufacturer identifier. If none can be found, it will be
 	 * inserted in DB.
 	 * </p>
@@ -146,10 +176,7 @@ public class ProductDAO {
 	 */
 	private NUMBER getManufacturerOrInsert(final String aManufacturer) throws SQLException {
 		NUMBER manufacturerId;
-		String truncatedManufacturerCode = aManufacturer;
-		if (truncatedManufacturerCode.length() >= 20) {
-			truncatedManufacturerCode = aManufacturer.substring(0, 19);
-		}
+		String truncatedManufacturerCode = getTruncatedOrValue(aManufacturer, Product.MFG_CODE_LENGTH);
 		try (OraclePreparedStatement manufacturerStatement = (OraclePreparedStatement) connection
 				.prepareStatement(MFG_SEARCH);) {
 			manufacturerStatement.setString(1, truncatedManufacturerCode);
@@ -173,6 +200,26 @@ public class ProductDAO {
 			}
 		}
 		return manufacturerId;
+	}
+
+	/**
+	 * <p>
+	 * Get the value of the provided string of its truncated value if the length is
+	 * greater or equals than the second argument.
+	 * </p>
+	 * 
+	 * @param aValue
+	 *            the value to use.
+	 * @param aMaxLength
+	 *            the maximum length of the string.
+	 * @return the provided string or its truncated version.
+	 */
+	private String getTruncatedOrValue(String aValue, final int aMaxLength) {
+		String truncatedValue = aValue;
+		if (truncatedValue.length() >= aMaxLength) {
+			truncatedValue = truncatedValue.substring(0, aMaxLength - 1);
+		}
+		return truncatedValue;
 	}
 
 	/**
@@ -229,7 +276,7 @@ public class ProductDAO {
 		// SELECT pn?
 		try (OraclePreparedStatement productStatement = (OraclePreparedStatement) connection
 				.prepareStatement(PN_SEARCH);) {
-			productStatement.setString(1, aProduct.getPartNumber());
+			productStatement.setString(1, getTruncatedOrValue(aProduct.getPartNumber(), Product.PARTS_PN_LENGTH));
 			OracleResultSet result = (OracleResultSet) productStatement.executeQuery();
 			if (result.next()) {
 				// IF FOUND: insert an alternate to it !
@@ -325,41 +372,51 @@ public class ProductDAO {
 		NUMBER uomId = getUOMOrInsert(aProduct.getUnitOfMeasure());
 
 		String partNumber = isForAlternate ? aProduct.getAlternatePartNumber() : aProduct.getPartNumber();
+		String truncatedPN = getTruncatedOrValue(partNumber, Product.PARTS_PN_LENGTH);
 
 		if (LOGGER.isDebugEnabled()) {
-			LOGGER.debug("Inserting alternate product for PN: " + partNumber + ". Existing one: "
-					+ aPartNumberId.longValue());
+			LOGGER.debug("Trying to insert alternate product for PN: " + partNumber + " (truncated to " + truncatedPN
+					+ "). Existing one: " + aPartNumberId.longValue());
 		}
 		// Insert an alternate part
 		NUMBER altProductId = null;
-		try (OraclePreparedStatement altProductStatement = (OraclePreparedStatement) connection
-				.prepareStatement(PRODUCT_INSERT_FOR_ALT);) {
-			altProductStatement.setString(1, partNumber);
-			altProductStatement.setString(2, partNumber.toUpperCase());
-			altProductStatement.setString(3, aProduct.getDescription());
-			altProductStatement.setNUMBER(4, aMFGIdentifier);
-			altProductStatement.setNUMBER(5, uomId);
-			altProductStatement.setClob(6, new StringReader(aProduct.getNote()));
-			altProductStatement.registerReturnParameter(7, OracleTypes.NUMBER);
-			altProductStatement.execute();
-			OracleResultSet altResultSet = (OracleResultSet) altProductStatement.getReturnResultSet();
-			altResultSet.next();
-			altProductId = altResultSet.getNUMBER(1);
-		}
+		if (!existsProductAndManufacturer(truncatedPN, aMFGIdentifier)) {
+			try (OraclePreparedStatement altProductStatement = (OraclePreparedStatement) connection
+					.prepareStatement(PRODUCT_INSERT_FOR_ALT);) {
+				altProductStatement.setString(1, truncatedPN);
+				altProductStatement.setString(2, truncatedPN.toUpperCase());
+				String truncatedDescription = getTruncatedOrValue(aProduct.getDescription(),
+						Product.PARTS_DESCRITPION_LENGTH);
+				altProductStatement.setString(3, truncatedDescription);
+				altProductStatement.setString(4, truncatedDescription.toUpperCase());
+				altProductStatement.setNUMBER(5, aMFGIdentifier);
+				altProductStatement.setNUMBER(6, uomId);
+				altProductStatement.setClob(7, new StringReader(aProduct.getNote()));
+				altProductStatement.registerReturnParameter(8, OracleTypes.NUMBER);
+				altProductStatement.execute();
+				OracleResultSet altResultSet = (OracleResultSet) altProductStatement.getReturnResultSet();
+				altResultSet.next();
+				altProductId = altResultSet.getNUMBER(1);
+			}
 
-		if (LOGGER.isDebugEnabled()) {
-			LOGGER.debug("Inserting in alternate parts master. PartNumber " + aPartNumberId.longValue()
-					+ "; Alternate PartNumber: " + altProductId.longValue());
-		}
-		try (OraclePreparedStatement productStatement = (OraclePreparedStatement) connection
-				.prepareStatement(ALT_PRODUCT_INSERT);) {
-			productStatement.setNUMBER(1, aPartNumberId);
-			productStatement.setNUMBER(2, altProductId);
-			productStatement.executeUpdate();
-		}
-
-		if (!isForAlternate && altProductId != null) {
-			insertAlternateProduct(aProduct, altProductId, aMFGIdentifier, true);
+			if (LOGGER.isDebugEnabled()) {
+				LOGGER.debug("Inserting in alternate parts master. PartNumber " + aPartNumberId.longValue()
+						+ "; Alternate PartNumber: " + altProductId.longValue());
+			}
+			try (OraclePreparedStatement productStatement = (OraclePreparedStatement) connection
+					.prepareStatement(ALT_PRODUCT_INSERT);) {
+				productStatement.setNUMBER(1, aPartNumberId);
+				productStatement.setNUMBER(2, altProductId);
+				productStatement.executeUpdate();
+			}
+			if (!isForAlternate && altProductId != null) {
+				insertAlternateProduct(aProduct, altProductId, aMFGIdentifier, true);
+			}
+		} else {
+			if (LOGGER.isDebugEnabled()) {
+				LOGGER.debug("Alternate product creation is skipped because the combination part number (" + truncatedPN
+						+ ") and manufacturer (" + aProduct.getManufacturer() + ") already exists in database.");
+			}
 		}
 	}
 
@@ -383,13 +440,17 @@ public class ProductDAO {
 		NUMBER partNumberId = null;
 		try (OraclePreparedStatement productStatement = (OraclePreparedStatement) connection
 				.prepareStatement(PRODUCT_INSERT);) {
-			productStatement.setString(1, aProduct.getPartNumber());
-			productStatement.setString(2, aProduct.getPartNumber().toUpperCase());
-			productStatement.setString(3, aProduct.getDescription());
-			productStatement.setNUMBER(4, aMFGIdentifier);
-			productStatement.setNUMBER(5, uomId);
-			productStatement.setClob(6, new StringReader(aProduct.getNote()));
-			productStatement.registerReturnParameter(7, OracleTypes.NUMBER);
+			String truncatedPN = getTruncatedOrValue(aProduct.getPartNumber(), Product.PARTS_PN_LENGTH);
+			productStatement.setString(1, truncatedPN);
+			productStatement.setString(2, truncatedPN.toUpperCase());
+			String truncatedDescription = getTruncatedOrValue(aProduct.getDescription(),
+					Product.PARTS_DESCRITPION_LENGTH);
+			productStatement.setString(3, truncatedDescription);
+			productStatement.setString(4, truncatedDescription.toUpperCase());
+			productStatement.setNUMBER(5, aMFGIdentifier);
+			productStatement.setNUMBER(6, uomId);
+			productStatement.setClob(7, new StringReader(aProduct.getNote()));
+			productStatement.registerReturnParameter(8, OracleTypes.NUMBER);
 			productStatement.execute();
 			OracleResultSet productResultSet = (OracleResultSet) productStatement.getReturnResultSet();
 			productResultSet.next();
